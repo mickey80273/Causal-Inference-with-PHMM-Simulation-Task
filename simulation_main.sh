@@ -12,8 +12,8 @@
 # Remember to change the path of the python file
 dir_path="/home/u56101022/Project/SimulationTask"
 file_name="v3_20231225"
-num_samples=10000
 num_simulation=10
+num_samples=10000
 
 # Generate and store the observced data and hidden state data; estimate the parameters
 python3 generate_simulation_data.py --data_path $dir_path --file_name $file_name --num_samples $num_samples --num_simulation $num_simulation
@@ -31,5 +31,5 @@ Rscript simulation_main.R $dir_path $file_name
 # Generate the fianl table
 python3 generate_final_table.py --data_path $dir_path --file_name $file_name --num_simulation $num_simulation
 
-# # Draw the graph
+# Draw the graph
 python3 generate_graph.py --data_path $dir_path --file_name $file_name --num_simulation $num_simulation
