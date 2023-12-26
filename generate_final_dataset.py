@@ -10,7 +10,8 @@ parser.add_argument('--num_simulations', type=int, default=10, help='Number of s
 parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
 args = parser.parse_args()
 
-def generate_samples(directory, index, num_samples, theta_set="seq_period10"):
+def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,beta_0, beta_1, beta_2, beta_3,
+                    theta_set="seq_period10"):
     """
     Generate the final dataset by combining generated covariates with real values, states, 
     and forward probabilities, and then calculating Y.
@@ -27,10 +28,6 @@ def generate_samples(directory, index, num_samples, theta_set="seq_period10"):
     observed_data_path = os.path.join(directory, f"{result_file}/observed_data_{index}.csv")
     hidden_state_path = os.path.join(directory, f"{result_file}/hidden_state_{index}.csv")
     forward_probability_path = os.path.join(directory, f"{result_file}/statep_{index}.csv")
-
-    # Constants
-    gamma_1, gamma_2, gamma_3 = 2, 15, 10
-    beta_0, beta_1, beta_2, beta_3 = 1, -5, 10, 2
 
     # Generate covariates
     X = np.random.normal(size=num_samples).reshape(-1, 1) # X ~ N(0, 1)
@@ -80,6 +77,13 @@ if __name__ == "__main__":
     num_samples = args.num_samples
     num_simulations = args.num_simulations
 
+    # Constants
+    gamma_1, gamma_2, gamma_3 = 2, 15, 10
+    beta_0, beta_1, beta_2, beta_3 = 1, -5, 10, 2
+
     # run for all 10 samples
     for i in range(num_simulations):
-        generate_samples(directory_path, i, num_samples)
+        generate_samples(directory_path, i, num_samples, 
+                         gamma_1, gamma_2, gamma_3,
+                         beta_0, beta_1, beta_2, beta_3
+                         )
