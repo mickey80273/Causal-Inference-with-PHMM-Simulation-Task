@@ -1,0 +1,717 @@
+---
+title: "<centering>Simulation Task</centering>"
+subtitle: 
+author: 羅崇綱
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_float: true
+    toc_depth: 2
+    self_contained: yes
+  pdf_document:
+    toc: yes
+keywords: conditional average treatment effect; machine learning; econometrics
+theme: null
+abstract: 
+editor_options:
+  chunk_output_type: console
+---
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, comment=NA)
+# Clear workspace
+rm(list = ls())
+
+# Set seed for reproducibility
+set.seed(1234)
+```
+
+# 變數設定與實驗背景說明
+
+## 載入套件
+
+```{r cran_packages, include=TRUE, message=FALSE, warning=FALSE}
+# data science packages
+library(tidyverse)
+library(dplyr)
+library(magrittr) 
+
+library(grf)          # causal forest
+library(rpart)        # tree
+library(glmnet)       # lasso
+library(splines)      # splines
+library(personalized) # propensity score plot
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(corrplot)
+library(ggplot2)
+
+# X-Learner
+library(randomForest) # random forest
+library(glmnet)       # lasso
+library(grf)
+library(hdm)
+```
+
+
+## 匯入原始資料檔進行前處理
+
+```{r}
+# 匯入csv資料檔: 17萬筆資料，26個變數
+data <- read.csv("/home/u56101022/Project/CartAnalysis/simulation/simulation_data.csv")
+
+# variables
+outcome <- "outcome"
+treatment <- "treatment"
+covariate <- "covariate"
+theta <- "theta"
+covariates <- c(covariate, theta)
+```
+
+```{r}
+# manipulate the setting
+setid <- 0
+```
+# 基本分析
+
+## 相關係數圖
+
+```{r}
+# correlation plot
+cor_matrix <- cor(data)
+corrplot::corrplot(cor_matrix, method = "circle")
+```
+
+## 平均處置效果 ATE
+
+```{r}
+fmla <- formula(paste(outcome, ' ~ ', treatment))
+ols <-  lm(fmla, data= data)
+coeftest(ols, vcov=vcovHC(ols, type='HC2'))
+```
+
+## 平均處置效果（加入交乘項）
+
+```{r}
+# Create the formula
+fmla <- as.formula("outcome ~ treatment + covariate + theta + treatment:covariate + treatment:theta  + treatment:covariate:theta")
+print(fmla)
+
+# Fit the linear regression model
+ols <-  lm(fmla, data= data)
+
+# Perform heteroskedasticity-robust standard errors (HC2)
+robust_se <- vcovHC(ols, type = 'HC2')
+
+# Perform coefficient tests
+coeftest_result <- coeftest(ols, vcov = robust_se)
+
+# Print coefficient test results
+print(coeftest_result)
+
+```
+
+# CATE via causal forests
+
+Data-driven subgroups/hypotheses
+
++ via the causal forest (grf), Athey and Wager (2019) and then
+
++ via Chernozhukov, Demirer, Duflo, Fernández-Val (2020), "Generic Machine Learning Inference on Heterogenous Treatment Effects in Randomized Experiments"
+
+For demonstration purpose, I times the state2p with 1e50
+
+## 估計CATE
+
+```{r}
+# Athey and Wager (2019), grf
+# Preparing data to fit a causal forest
+if(setid == 2){
+  fmla <- formula(paste0("~ 0 +" , covariates))
+} else{
+  fmla <- formula(paste0("~ 0 +", paste0(covariates, collapse="+")))
+}
+
+XX <- model.matrix(fmla, data)
+W <- data[,treatment]
+Y <- data[,outcome]
+
+# Comment or uncomment as appropriate.
+# Randomized setting with known and fixed probabilities (here: 0.5).
+system.time(
+ forest.tau <- causal_forest(XX, Y, W, W.hat=.5) 
+)
+```
+
+
+```{r}
+# Get predictions from forest fitted above.
+tau.hat <- predict(forest.tau)$predictions  # tau(X) CATE estimates
+
+# Do NOT use the histogram of estiamted CATE for assessing heterogeneity. 
+# "If the histogram is concentrated at a point, 
+# we may simply be underpowered: our method was not able o detect 
+# any heterogeneity, but maybe it would detect it if we had more data.
+# If the histogram is spread out, we may be overfitting: 
+# our model is producing very noisy estimates CATE, but in fact the true CATE
+# can be much smoother as a function of x
+hist(tau.hat, main="CATE estimates", freq=F)
+```
+
+## 變數重要性
+
+```{r}
+# a measure of variable importance that indicates 
+# how often a variable was used in a tree split. it's just a rough diagnostic.
+# "If two covariates are highly correlated, 
+# the trees might split on one covariate but not the other, even though 
+# both (or maybe neither) are relevant in the true data-generating process.
+
+var_imp <- c(variable_importance(forest.tau))
+names(var_imp) <- covariates
+sorted_var_imp <- sort(var_imp, decreasing = TRUE)
+sorted_var_imp
+```
+
+# 檢查是否有異質處置效果
+
+Based on the grf estimates of CATE, we then use the procedure developed in Chernozhukov, Demirer, Duflo, Fernández-Val (2020), to excplore data-driven subgroups and test treatment effect heterogeneity
+
+```{r}
+# Valid randomized data and observational data with unconfoundedness+overlap.
+# Note: read the comments below carefully. 
+# In randomized settings, do not estimate forest.e and e.hat; 
+# use known assignment probs.
+
+# Prepare dataset
+if(setid == 2){
+  fmla <- formula(paste0("~ 0 +" , covariates))
+} else{
+  fmla <- formula(paste0("~ 0 + ", paste0(covariates, collapse="+")))
+}
+
+X <- model.matrix(fmla, data)
+W <- data[,treatment]
+Y <- data[,outcome]
+
+# Number of rankings that the predictions will be ranking on 
+# (e.g., 2 for above/below median estimated CATE, 5 for estimated CATE quintiles, etc.)
+num.rankings <- 5  
+
+# number of observations
+n <- nrow(data)
+
+# Prepare for data.splitting
+# Assign a fold number to each observation.
+# The argument 'clusters' in the next step will mimick K-fold cross-fitting.
+num.folds <- 10
+folds <- sort(seq(n) %% num.folds) + 1 #每一個樣本的組別編號
+
+# Comment or uncomment depending on your setting.
+# Randomized settings with fixed and known probabilities (here: 0.66).
+system.time(
+ forest <- causal_forest(X, Y, W, W.hat=.5, clusters = folds) #樣本分成10組
+)
+# Observational setting with unconfoundedness+overlap (unknown assignment probs):
+# forest <- causal_forest(X, Y, W, clusters = folds) 
+```
+
+```{r}
+# Retrieve out-of-bag predictions.
+# Predictions for observation in fold k will be computed using 
+# trees that were not trained using observations for that fold.
+
+tau.hat <- predict(forest)$predictions
+```
+
+
+```{r}
+# Rank observations *within each fold* into quintiles according to their CATE predictions.
+ranking <- rep(NA, n)
+for (fold in seq(num.folds)) {
+  tau.hat.quantiles <- quantile(tau.hat[folds == fold], probs = seq(0, 1, by=1/num.rankings))
+  # random_numbers <- runif(6, min = 0, max = 1) * 1e-12
+  # tau.hat.quantiles <- tau.hat.quantiles + random_numbers
+  ranking[folds == fold] <- cut(tau.hat[folds == fold], tau.hat.quantiles, include.lowest=TRUE,labels=seq(num.rankings))
+}
+```
+
+
+```{r}
+# Compute the ATE within each group defined above
+# The following is valid only in randomized settings
+# Average difference-in-means within each ranking
+
+# Formula y ~ 0 + ranking + ranking:w
+fmla <- paste0(outcome, " ~ 0 + ranking + ranking:", treatment)
+ols.ate <- lm(fmla, data=transform(data, ranking=factor(ranking)))
+ols.ate <- coeftest(ols.ate, vcov=vcovHC(ols.ate, type='HC2'))
+interact <- which(grepl(":", rownames(ols.ate)))
+ols.ate <- data.frame("ols", paste0("Q", seq(num.rankings)), ols.ate[interact, 1:2])
+rownames(ols.ate) <- NULL # just for display
+colnames(ols.ate) <- c("method", "ranking", "estimate", "std.err")
+ols.ate
+```
+
+
+```{r}
+# Another option is to average the AIPW (doubly robust) scores within each group.
+# This valid for both randomized settings and observational settings 
+# with unconfoundedness and overlap. Moreover, AIPW-based estimators should 
+# produce estimates with tighter confidence intervals in large samples.
+# Computing AIPW scores.
+
+tau.hat <- predict(forest)$predictions
+e.hat <- forest$W.hat # P[W=1|X]
+m.hat <- forest$Y.hat # E[Y|X]
+
+# Estimating mu.hat(X, 1) and mu.hat(X, 0) for obs in held-out sample
+# Note: to understand this, read equations 6-8 in this vignette:
+# https://grf-labs.github.io/grf/articles/muhats.html
+mu.hat.0 <- m.hat - e.hat * tau.hat        # E[Y|X,W=0] = E[Y|X] - e(X)*tau(X)
+mu.hat.1 <- m.hat + (1 - e.hat) * tau.hat  # E[Y|X,W=1] = E[Y|X] + (1 - e(X))*tau(X)
+
+# AIPW scores
+aipw.scores <- tau.hat + W / e.hat * (Y -  mu.hat.1) - (1 - W) / (1 - e.hat) * (Y -  mu.hat.0)
+ols <- lm(aipw.scores ~ 0 + factor(ranking))
+forest.ate <- data.frame("aipw", paste0("Q", seq(num.rankings)), coeftest(ols, vcov=vcovHC(ols, "HC2"))[,1:2])
+colnames(forest.ate) <- c("method", "ranking", "estimate", "std.err")
+rownames(forest.ate) <- NULL # just for display
+forest.ate
+```
+
+## 圖形是否呈單調性
+
+```{r}
+#The code below plots the estimates.
+# Concatenate the two results.
+res <- rbind(forest.ate, ols.ate)
+
+# Plotting the point estimate of average treatment effect 
+# and 95% confidence intervals around it.
+ggplot(res) +
+  aes(x = ranking, y = estimate, group=method, color=method) + 
+  geom_point(position=position_dodge(0.2)) +
+  geom_errorbar(aes(ymin=estimate-2*std.err, ymax=estimate+2*std.err), width=.2, position=position_dodge(0.2)) +
+  ylab("") + xlab("") +
+  ggtitle("Average CATE within each ranking (as defined by predicted CATE)") +
+  theme_minimal() +
+  theme(legend.position="bottom", legend.title = element_blank())
+
+# When there isn’t much detectable heterogeneity, 
+# the plot above can end up being non-monotonic. 
+# This can mean that the number of observations is too small for us 
+# to be able to detect subgroups with relevant differences in treatment effect.
+```
+
+## 各組的平均特質
+
+```{r}
+# check if different groups have different average covariate levels across rankings.
+
+df <- mapply(function(covariate) {
+  # Looping over covariate names
+  # Compute average covariate value per ranking (with correct standard errors)
+  fmla <- formula(paste0(covariate, "~ 0 + ranking"))
+  ols <- lm(fmla, data=transform(data, ranking=factor(ranking)))
+  ols.res <- coeftest(ols, vcov=vcovHC(ols, "HC2"))
+  
+  # Retrieve results
+  avg <- ols.res[,1]
+  stderr <- ols.res[,2]
+  
+  # Tally up results
+  data.frame(covariate, avg, stderr, ranking=paste0("Q", seq(num.rankings)), 
+             # Used for coloring
+             scaling=pnorm((avg - mean(avg))/sd(avg)), 
+             # We will order based on how much variation is 'explain' by the averages
+             # relative to the total variation of the covariate in the data
+             variation=sd(avg) / sd(data[,covariate]),
+             # String to print in each cell in heatmap below
+             labels=paste0(signif(avg, 3), "\n", "(", signif(stderr, 3), ")"))
+}, covariates, SIMPLIFY = FALSE)
+df <- do.call(rbind, df)
+
+# a small optional trick to ensure heatmap will be in decreasing order of 'variation'
+df$covariate <- reorder(df$covariate, order(df$variation))
+
+# plot heatmap
+ggplot(df) +
+  aes(ranking, covariate) +
+  geom_tile(aes(fill = scaling)) + 
+  geom_text(aes(label = labels)) +
+  scale_fill_gradient(low = "#E1BE6A", high = "#40B0A6") +
+  ggtitle(paste0("Average covariate values within group (based on CATE estimate ranking)")) +
+  theme_minimal() + 
+  ylab("") + xlab("CATE estimate ranking") +
+  theme(plot.title = element_text(size = 11, face = "bold"),
+        axis.text=element_text(size=11)) 
+```
+
+## 檢定
+
+Assessing heterogeneity through the features of CATE
+
+If the coefficient **(the 2nd coefficient in the following regression)** is significantly greater than zero, then we can reject the null of no heterogeneity, cf. Chernozhukov, Demirer, Duflo, Fernández-Val (2020).
+
++ H_0: no heterogeneity
+
+```{r}
+# The function grf::test_calibration computes an estimate of 
+# the best linear predictor of true CATE based on out-of-bag predictions CATE
+test_calibration(forest.tau)
+```
+
+# Policy learning
+
+Following [Athey and Wager (2020, Econometrica)], we use **shallow tree policies** as our main example of **parametric policies**. The R package `policytree` to find a policy.
+
+
+Flowchart:
+
++ The first step is to construct AIPW scores. The function `double_robust_scores` from the `policytree` package does that in one line.
+
++ Fit a policy tree on forest-based AIPW scores
+
++ Cost of treatment: `cost` <- 0 
+
++ Fit policy on training subset
+
++ Predict treatment on test set
+
++ Examine the policy 
+
++ Test whether the learned policy value is different from the value attained by the no-treatmen policy
+
+
+## Cost of treatment (cost: 0%, 5%, 10%)
+
+```{r}
+library(policytree)
+# Prepare data
+X <- data[,covariates]
+Y <- data[,outcome]
+W <- data[,treatment]
+
+# Randomized setting: pass the known treatment assignment as an argument.
+# forest <- causal_forest(X, Y, W, W.hat=.5)
+forest <- forest.tau
+# Observational settting with unconfoundedness+overlap: let the assignment probabilities be estimated.
+# forest <- causal_forest(X, Y, W)
+
+# Fit a policy tree on forest-based AIPW scores
+gamma.matrix <- double_robust_scores(forest)  
+
+# Note: the function double_robust_scores is equivalent to the following:
+# tau.hat <- predict(forest)$predictions
+# mu.hat.1 <- forest$Y.hat + (1 - forest$W.hat) * tau.hat
+# mu.hat.0 <- forest$Y.hat - forest$W.hat * tau.hat
+# gamma.hat.1 <- mu.hat.1 + W/forest$W.hat * (Y - mu.hat.1)
+# gamma.hat.0 <- mu.hat.0 + (1-W)/(1-forest$W.hat) * (Y - mu.hat.0)
+# gamma.matrix <- cbind(gamma.hat.0, gamma.hat.1)
+```
+
+## cost: 0%
+
+```{r}
+cost <- 0
+gamma.matrix0 <- gamma.matrix
+gamma.matrix0[,2] <- gamma.matrix0[,2] - cost  # Subtracting cost of treatment
+```
+
+### Policy tree plot
+
+```{r}
+# Divide data into train and evaluation sets
+train <- 1:(.8*n)
+test <- (.8*n):n
+
+# Fit policy on training subset
+if(setid == 2){
+  system.time(
+    policy <- policy_tree(matrix(X[train]), gamma.matrix0[train,], depth = 2, min.node.size=1)
+  )
+} else{
+  system.time(
+    policy <- policy_tree(X[train,], gamma.matrix0[train,], depth = 2, min.node.size=1)
+  )
+}
+```
+
+```{r}
+if(setid == 2){
+  # Predicting treatment on test set
+  pi.hat <- predict(policy, matrix(X[test])) - 1
+
+  # Predicting leaves (useful later)
+  leaf <- predict(policy,  matrix(X[test]), type = "node.id")
+  num.leaves <- length(unique(leaf))
+} else {
+  # Predicting treatment on test set
+  pi.hat <- predict(policy, X[test,]) - 1
+
+  # Predicting leaves (useful later)
+  leaf <- predict(policy, X[test,], type = "node.id")
+  num.leaves <- length(unique(leaf))
+}
+
+# Examining the policy we just learned.
+print(policy)
+plot(policy, leaf.labels = c("control", "treatment"))
+```
+
+
+### Value estimates 
+
+```{r}
+# Estimating the value of the learned policy. 
+# Note in the code below that we must subtract the cost of treatment.
+
+A <- pi.hat == 1
+Y.test <- data[test, outcome]
+W.test <- data[test, treatment]
+
+# the number of agent being treated
+treated <- sum(W.test == 1)
+print(paste("Being treated:", treated))
+print(paste("Not treated:", length(W.test) - treated))
+
+# Only valid for randomized setting.
+# Note the -cost here!
+value.avg.estimate <- (mean(Y.test[A & (W.test==1)]) - cost) * mean(A) + mean(Y.test[!A & (W.test==0)]) * mean(!A)
+value.avg.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) * mean(A)^2 + var(Y.test[!A & (W.test==0)]) / sum(!A & W.test==0) * mean(!A)^2)
+print(paste("Estimate [sample avg]:", value.avg.estimate, "(", value.avg.stderr, ")"))
+
+# Valid in both randomized and obs setting with unconf + overlap.
+gamma.hat.1 <- gamma.matrix[test,2]
+gamma.hat.0 <- gamma.matrix[test,1]
+gamma.hat.pi <- pi.hat * gamma.hat.1 + (1 - pi.hat)  * gamma.hat.0
+value.aipw.estimate <- mean(gamma.hat.pi)
+value.aipw.stderr <- sd(gamma.hat.pi) / sqrt(length(gamma.hat.pi))
+print(paste("Estimate [AIPW]:", value.aipw.estimate, "(", value.aipw.stderr, ")"))
+```
+
+### Hypothesis testing
+
+```{r}
+# Testing whether the learned policy value is different from 
+# the value attained by the “no-treatment” policy.
+
+# Only valid for randomized setting.
+diff.estimate <- (mean(Y.test[A & (W.test==1)]) - cost - mean(Y.test[A & (W.test==0)])) * mean(A)
+diff.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) + var(Y.test[A & (W.test==0)]) / sum(A & W.test==0)) * mean(A)^2
+print(paste("Difference estimate [sample avg]:", diff.estimate, "; Std. Error:", diff.stderr))
+```
+
+
+# First Best Policy
+Only the one with predicted CATE larger than the threshold will be assigned treatment
+
+## Cost: 0%
+
+```{r}
+cost <- 0 
+
+# assign treatment for those whose predicted CATE larger than 0
+pi.hat <- ifelse(tau.hat > cost, 1, 0)
+```
+
+## Value estimates 
+
+```{r}
+# Estimating the value of the learned policy. 
+# Note in the code below that we must subtract the cost of treatment.
+
+A <- pi.hat == 1
+Y.test <- data[, outcome]
+W.test <- data[, treatment]
+
+# the number of agent being treated
+treated <- sum(W.test == 1)
+print(paste("Being treated:", treated))
+print(paste("Not treated:", length(W.test) - treated))
+
+# Only valid for randomized setting.
+# Note the -cost here!
+value.avg.estimate <- (mean(Y.test[A & (W.test==1)]) - cost) * mean(A) + mean(Y.test[!A & (W.test==0)]) * mean(!A)
+## Since there might be empy intersection between !A and W.test==0, it Y.test[!A & (W.test==0)] return NA
+value.avg.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) * mean(A)^2 + var(Y.test[!A & (W.test==0)]) / sum(!A & W.test==0) * mean(!A)^2)
+print(paste("Estimate [sample avg]:", value.avg.estimate, "(", value.avg.stderr, ")"))
+```
+
+## Hypothesis testing
+
+```{r}
+# Testing whether the learned policy value is different from 
+# the value attained by the “no-treatment” policy.
+
+# Only valid for randomized setting.
+diff.estimate <- (mean(Y.test[A & (W.test==1)]) - cost - mean(Y.test[A & (W.test==0)])) * mean(A)
+diff.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) + var(Y.test[A & (W.test==0)]) / sum(A & W.test==0)) * mean(A)^2
+print(paste("Difference estimate [sample avg]:", diff.estimate, "; Std. Error:", diff.stderr))
+```
+
+# CATE via X-Learner (Lasso)
+
+## 估計CATE
+```{r}
+if(setid != 2){
+  # X-learner with Lasso
+  Y <- data[, outcome]
+  W <- data[, treatment]
+  X <- as.matrix(data[, covariates])
+  
+  # Generate random number
+  # since for all the observations that tag equals to one, all of their outcome equals to 0
+  # However the cv function needs the outcome to have some variation
+  random_numbers <- runif(length(Y[W==0])) * 1e-10
+  
+  # Step 1. we construct prediction functions for mu1.hat and mu0.hat, respectively
+  TL.mu0 <- cv.glmnet(X[W==0,], Y[W==0] + random_numbers, nfolds = 10, alpha =1,  standardize = TRUE)
+  TL.mu0.coef <- as.vector(t(coef(TL.mu0, s = "lambda.min")))
+  
+  TL.mu1 <- cv.glmnet(X[W==1,], Y[W==1], nfolds = 10, alpha =1,  standardize = TRUE)
+  TL.mu1.coef <- as.vector(t(coef(TL.mu1, s = "lambda.min")))
+  
+  # Step 2. For treated and control groups, we respectively calculated the noisy proxies for individual treatment effect
+  yhat1 <- cbind(1,X[W==0, ]) %*% TL.mu1.coef
+  yhat0 <- cbind(1,X[W==1, ]) %*% TL.mu0.coef
+  
+  tau.tilde.1 <- Y[W==1] - yhat0
+  tau.tilde.0 <- yhat1 - Y[W==0]
+  
+  #Step 3. For treated and control groups, we respectively construct the prediction function (tau.hat) by predicting tau.tilde from X.
+  XL.tau.hat.1 <- cv.glmnet(X[W==1, ], tau.tilde.1, nfolds = 10, alpha = 1, standardize = TRUE)
+  XL.tau.hat.1.coef <- as.vector(t(coef(XL.tau.hat.1, s = "lambda.min")))
+  XL.tau.hat.1.preds <- cbind(1,X) %*% XL.tau.hat.1.coef
+  
+  XL.tau.hat.0 <- cv.glmnet(X[W==0, ], tau.tilde.0, nfolds = 10, alpha = 1, standardize = TRUE)
+  XL.tau.hat.0.coef <- as.vector(t(coef(XL.tau.hat.0, s = "lambda.min")))
+  XL.tau.hat.0.preds <- cbind(1,X) %*% XL.tau.hat.0.coef
+  
+  #Step 4. we estimated e.hat and report the CATE estimator.
+  
+  e_fit <- cv.glmnet(X, W, nfolds = 10, keep = TRUE, alpha = 1, standardize = TRUE)
+  e_hat <- e_fit$fit.preval[,!is.na(colSums(e_fit$fit.preval))][, e_fit$lambda[!is.na(colSums(e_fit$fit.preval))] ==  e_fit$lambda.min]
+  
+  # final predicted CATE
+  XL.cate <- ( 1 - e_hat ) * XL.tau.hat.1.preds + e_hat * XL.tau.hat.0.preds
+}
+```
+
+```{r}
+if(setid != 2){
+  # draw the distribution of CATE
+  hist(XL.cate, main="CATE estimates", freq=F)
+}
+```
+
+## Cost: 0%
+
+## Policy
+Only the one with predicted CATE larger than 0 will be assigned treatment
+
+```{r}
+if(setid != 2){
+  # cost of the treatment
+  # set the threshold for simple policy
+  cost <- 0 
+  
+  ## NLLTcat: 0.1
+  ## bid_B_all_w1 and bid_B_new_w1: 0
+  
+  # assign treatment for those whose predicted CATE larger than 0
+  pi.hat <- ifelse(XL.cate > cost, 1, 0)
+}
+```
+
+## Value estimates 
+
+```{r}
+if(setid != 2){
+  # Estimating the value of the learned policy. 
+  # Note in the code below that we must subtract the cost of treatment.
+  
+  A <- pi.hat == 1
+  Y.test <- data[, outcome]
+  W.test <- data[, treatment]
+  
+  # the number of agent being treated
+  treated <- sum(W.test == 1)
+  print(paste("Being treated:", treated))
+  print(paste("Not treated:", length(W.test) - treated))
+  
+  # Only valid for randomized setting.
+  # Note the -cost here!
+  value.avg.estimate <- (mean(Y.test[A & (W.test==1)]) - cost) * mean(A) + mean(Y.test[!A & (W.test==0)]) * mean(!A)
+  value.avg.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) * mean(A)^2 + var(Y.test[!A & (W.test==0)]) / sum(!A & W.test==0) * mean(!A)^2)
+  print(paste("Estimate [sample avg]:", value.avg.estimate, "(", value.avg.stderr, ")"))
+}
+```
+
+## Hypothesis testing
+
+```{r}
+if(setid != 2){
+  # Testing whether the learned policy value is different from 
+  # the value attained by the “no-treatment” policy.
+  
+  # Only valid for randomized setting.
+  diff.estimate <- (mean(Y.test[A & (W.test==1)]) - cost - mean(Y.test[A & (W.test==0)])) * mean(A)
+  diff.stderr <- sqrt(var(Y.test[A & (W.test==1)]) / sum(A & (W.test==1)) + var(Y.test[A & (W.test==0)]) / sum(A & W.test==0)) * mean(A)^2
+  print(paste("Difference estimate [sample avg]:", diff.estimate, "; Std. Error:", diff.stderr))
+}
+```
+
+# Uniform Policy
+All observations are treated equally.
+
+## All-Treatment Policy (cost: 0, 0.005, 0.01)
+All observation are treated.
+
+### cost: 0%
+
+```{r}
+# Estimating the value of the learned policy. 
+# Note in the code below that we must subtract the cost of treatment.
+cost <- 0 
+
+Y <- data[, outcome]
+W <- data[, treatment]
+
+# the number of agent being treated
+treated <- sum(W == 1)
+print(paste("Being treated:", treated))
+print(paste("Not treated:", length(W) - treated))
+
+# Only valid for randomized setting.
+# Note the -cost here!
+value.avg.estimate <- mean(Y[W==1]) - cost
+value.avg.stderr <- sqrt(sum((Y - value.avg.estimate)^2 * W) / (n - 1)) / sqrt(n)
+
+print(paste("Estimate [sample avg]:", value.avg.estimate, "(", value.avg.stderr, ")"))
+```
+
+## No-Treatment Policy 
+No observations are treated. Hence, there is no cost.
+
+```{r}
+# Estimating the value of the learned policy. 
+# Note in the code below that we must subtract the cost of treatment.
+
+Y <- data[, outcome]
+W <- data[, treatment]
+
+# the number of agent being treated
+treated <- sum(W == 0)
+print(paste("Being treated:", treated))
+print(paste("Not treated:", length(W) - treated))
+
+# Only valid for randomized setting.
+value.avg.estimate <- mean(Y[W==0])
+value.avg.stderr <- sqrt(sum((Y - value.avg.estimate)^2 * (1 - W)) / (n - 1)) / sqrt(n)
+
+print(paste("Estimate [sample avg]:", value.avg.estimate, "(", value.avg.stderr, ")"))
+```
