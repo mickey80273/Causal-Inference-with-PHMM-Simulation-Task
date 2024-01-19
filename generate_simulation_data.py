@@ -129,7 +129,7 @@ if __name__ == "__main__":
     emission_rates = [1.0, 10.0]
 
     for idx in range(num_simulations):
-        sample_length = 10
+        sample_length = 11 # change your sequence length here
         num_samples = args.num_samples # change your number of samples here
 
         generate_data(transistion_mx=transition_matrix,

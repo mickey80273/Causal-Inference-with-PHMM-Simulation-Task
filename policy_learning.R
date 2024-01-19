@@ -32,19 +32,17 @@ policy_learning <- function(dir, outcome_vec, set_vec, cost_vec, idx, result_dir
     stringsAsFactors = FALSE
   )
   
-  # binary treatmet
-  treatment <- "treatment"
-
+  # set the path to the file
   index_dir <- paste0("/result_", idx)
-  
   # all the combination of all outcome  cost vector
   combination <- expand.grid(outcome_vec, set_vec)
-  
   # convert those into single vector
   combined_vec <- as.vector(apply(combination, 1, paste, collapse = "-"))
-  
   data <- read.csv(paste0(dir, index_dir, "/simulation_data_", idx,".csv"))
   n <- nrow(data)
+  
+  # binary treatmet
+  treatment <- "treatment"
   
   # write here into loop
   for (value in combined_vec){
@@ -64,10 +62,16 @@ policy_learning <- function(dir, outcome_vec, set_vec, cost_vec, idx, result_dir
       covariates <- c("value_period10")
     } else if(setid == 4){
       # setting 4
-      covariates <- c("X", "state2p")
+      covariates <- c("predicted_transaction")
     } else if(setid == 5){
       # setting 5
+      covariates <- c("X", "state2p")
+    } else if(setid == 6){
+      # setting 5
       covariates <- c("X", "value_period10")
+    } else if(setid == 7){
+      # setting 5
+      covariates <- c("X", "predicted_transaction")
     }
     
     # Extract Average Treatment effect: y = a + bT +u
@@ -79,7 +83,7 @@ policy_learning <- function(dir, outcome_vec, set_vec, cost_vec, idx, result_dir
     # Causal Forest
     print("Start for Causal Forest...")
     print(value)
-    if(setid <= 3){
+    if(setid < 5){
       fmla <- formula(paste0("~ 0 +" , covariates))
     } else{
       fmla <- formula(paste0("~ 0 +", paste0(covariates, collapse="+")))
@@ -124,7 +128,7 @@ policy_learning <- function(dir, outcome_vec, set_vec, cost_vec, idx, result_dir
       
       # Fit policy on training subset
       # Predicting treatment on test set
-      if(setid <= 3){
+      if(setid < 5){
         system.time(
           policy <- policy_tree(matrix(X[train]), gamma.matrix[train,], depth = 2, min.node.size=1, split.step=5)
         )

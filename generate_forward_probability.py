@@ -11,12 +11,6 @@ from tqdm import tqdm
 import numpy as np
 import argparse
 
-parser = argparse.ArgumentParser(description='Generate final data set')
-parser.add_argument('--data_path', type=str, default="", help='path to save the data')
-parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
-parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
-args = parser.parse_args()
-
 def extract_parameters(contents):
     regex_patterns = {
         'transition_matrix': r"Transition Matrix:\s*\[\[([\d.]+)\s*([\d.]+)\s*\]\s*\[([\d.]+)\s*([\d.]+)\s*\]\]",
@@ -60,6 +54,12 @@ def process_file(para_path, observed_data_path, output_path):
     df_final.to_csv(output_path)
 
 if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Generate final data set')
+    parser.add_argument('--data_path', type=str, default="", help='path to save the data')
+    parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
+    parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
+    args = parser.parse_args()
     
     directory_path = f'{args.data_path}/{args.file_name}'
     num_simulations = args.num_simulations

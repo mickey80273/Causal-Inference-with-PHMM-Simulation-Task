@@ -3,13 +3,6 @@ import numpy as np
 import pandas as pd
 import argparse
 
-parser = argparse.ArgumentParser(description='Generate final data set')
-parser.add_argument('--data_path', type=str, default="", help='path to save the data')
-parser.add_argument('--num_samples', type=int, default=10000, help='Number of samples')
-parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
-parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
-args = parser.parse_args()
-
 def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,beta_0, beta_1, beta_2, beta_3,
                     theta_set="seq_period10"):
     """
@@ -28,6 +21,7 @@ def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,be
     observed_data_path = os.path.join(directory, f"{result_file}/observed_data_{index}.csv")
     hidden_state_path = os.path.join(directory, f"{result_file}/hidden_state_{index}.csv")
     forward_probability_path = os.path.join(directory, f"{result_file}/statep_{index}.csv")
+    predicted_transaction_path = os.path.join(directory, f"{result_file}/predicted_transaction_{index}.csv")
 
     # Generate covariates
     X = np.random.normal(size=num_samples).reshape(-1, 1) # X ~ N(0, 1)
@@ -39,6 +33,7 @@ def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,be
         observe_data = pd.read_csv(observed_data_path)
         hidden_state = pd.read_csv(hidden_state_path)
         forward_probability = pd.read_csv(forward_probability_path)
+        predicted_transaction = pd.read_csv(predicted_transaction_path, index_col=0)
     except FileNotFoundError as e:
         print(f"Error in file reading: {e}")
         return
@@ -52,16 +47,18 @@ def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,be
         'state2p': forward_probability['state2p']
     })
 
-    combined_df = pd.concat([combined_df, observe_data, hidden_state], axis=1)
+    combined_df = pd.concat([combined_df, observe_data, hidden_state, predicted_transaction], axis=1)
 
     # Assigning theta
     combined_df['theta'] = combined_df[theta_set]
 
     # Calculate Y
-    combined_df['outcome'] = (beta_0 + beta_1 * combined_df['treatment'] + beta_2 * combined_df['theta'] +
-                        beta_3 * combined_df['X'] + gamma_1 * combined_df['treatment'] * combined_df['X'] +
-                        gamma_2 * combined_df['treatment'] * combined_df['theta'] +
-                        gamma_3 * combined_df['treatment'] * combined_df['X'] * combined_df['theta'])
+    combined_df['outcome'] = (beta_0 + 
+                            beta_1 * combined_df['treatment'] + beta_2 * combined_df['theta'] +
+                            beta_3 * combined_df['X']  +
+                            gamma_1 * combined_df['treatment'] * combined_df['X'] +
+                            gamma_2 * combined_df['treatment'] * combined_df['theta'] +
+                            gamma_3 * combined_df['treatment'] * combined_df['X'] * combined_df['theta'])
 
     print(combined_df.head())
 
@@ -69,17 +66,30 @@ def generate_samples(directory, index, num_samples, gamma_1, gamma_2, gamma_3,be
     output_path = os.path.join(directory, f"{result_file}/simulation_data_{index}.csv")
     combined_df.to_csv(output_path, index=False)
 
+    # delete the intermediate files
+    os.remove(observed_data_path)
+    os.remove(hidden_state_path)
+    os.remove(forward_probability_path)
+    os.remove(predicted_transaction_path)
+
     print("Done!!!\n\n")
 
 if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Generate final data set')
+    parser.add_argument('--data_path', type=str, default="", help='path to save the data')
+    parser.add_argument('--num_samples', type=int, default=10000, help='Number of samples')
+    parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
+    parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
+    args = parser.parse_args()
 
     directory_path = f'{args.data_path}/{args.file_name}'
     num_samples = args.num_samples
     num_simulations = args.num_simulations
 
     # Constants
-    gamma_1, gamma_2, gamma_3 = 2, 15, 10
     beta_0, beta_1, beta_2, beta_3 = 1, -5, 10, 2
+    gamma_1, gamma_2, gamma_3 = 2, 15, 10
 
     # run for all 10 samples
     for i in range(num_simulations):

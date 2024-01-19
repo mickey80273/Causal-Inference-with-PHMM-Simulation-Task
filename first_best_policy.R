@@ -71,7 +71,7 @@ first_best_policy <- function(dir, outcome_vec, set_vec, cost_vec, idx){
     value_split <-strsplit(value, "-")
     outcome <- value_split[[1]][1]
     setid <- as.numeric(value_split[[1]][2])
-  
+    
     if(setid == 1){
       # setting 1
       covariates <- c("X")
@@ -83,17 +83,23 @@ first_best_policy <- function(dir, outcome_vec, set_vec, cost_vec, idx){
       covariates <- c("value_period10")
     } else if(setid == 4){
       # setting 4
-      covariates <- c("X", "state2p")
+      covariates <- c("predicted_transaction")
     } else if(setid == 5){
       # setting 5
+      covariates <- c("X", "state2p")
+    } else if(setid == 6){
+      # setting 5
       covariates <- c("X", "value_period10")
+    } else if(setid == 7){
+      # setting 5
+      covariates <- c("X", "predicted_transaction")
     }
     
     # Generate CATE with causal forest
     print("Start for Causal Forest algorithm...")
     print(value)
     
-    if(setid < 4){
+    if(setid < 5){
       fmla <- formula(paste0("~ 0 +" , covariates))
     } else{
       fmla <- formula(paste0("~ 0 +", paste0(covariates, collapse="+")))
@@ -155,7 +161,7 @@ first_best_policy <- function(dir, outcome_vec, set_vec, cost_vec, idx){
     }
       
     # X-Learner: # of covariate should be larger than 1
-    if(setid >= 4){
+    if(setid >= 5){
       print("Start for X-Learner...")
       cov <- ifelse(length(covariates) > 1, paste0(covariates, collapse = "-"), covariates)
       print(paste0(outcome, " ", cov))

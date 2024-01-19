@@ -11,12 +11,6 @@ import pandas as pd
 import os
 import argparse
 
-parser = argparse.ArgumentParser(description='Generate final data set')
-parser.add_argument('--data_path', type=str, default="", help='path to save the data')
-parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
-parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
-args = parser.parse_args()
-
 def get_covariate_data(f_b, covariate_name):
             default_values = {"Welfare": "N/A", "Std": "N/A", "Treat": "N/A", "Non_treat": "N/A"}
 
@@ -56,9 +50,15 @@ def get_covariate_data(f_b, covariate_name):
             }
 
 if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Generate final data set')
+    parser.add_argument('--data_path', type=str, default="", help='path to save the data')
+    parser.add_argument('--num_simulations', type=int, default=10, help='Number of simulations')
+    parser.add_argument('--file_name', type=str, default="", help='the file name to save the data')
+    args = parser.parse_args()
 
     file_ = f'{args.data_path}/{args.file_name}'
-    covs = ['X', 'state2p' , 'value_period10', 'X-state2p', 'X-value_period10']
+    covs = ['X', 'state2p' , 'value_period10', 'predicted_transaction', 'X-state2p', 'X-value_period10', 'X-predicted_transaction']
     # algorithms = ['First Best - X-Learner', 'First Best - Causal Forest']
     algorithms = ['First Best - Causal Forest']
     cost = [0, 0.5, 0.7, 0.9]
