@@ -60,7 +60,7 @@ def plot_welfare_graph_first_best(iteration_id, result_path):
     ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     plt.subplots_adjust(right=0.6)
 
-    plt.savefig(result_path / f"first_bestwelfare_graph_{iteration_id}.png")
+    plt.savefig(result_path / f"first_best_welfare_graph_{iteration_id}.png")
     plt.close()
 
 def plot_welfare_graph_policy_learning(iteration_id, result_path):

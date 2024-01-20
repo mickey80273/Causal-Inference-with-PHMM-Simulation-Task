@@ -83,26 +83,17 @@ if __name__ == "__main__":
             first_best_ls = []
             for al in algorithms:
                 f_b = first_best_[first_best_["Algorithm"]==al]
-                X_data = get_covariate_data(f_b, "X")
-                state2p_data = get_covariate_data(f_b, "state2p")
-                value_period10_data = get_covariate_data(f_b, "value_period10")
-                X_state2p_data = get_covariate_data(f_b, "X-state2p")
-                X_value_period10_data = get_covariate_data(f_b, "X-value_period10")
-                append_data = [al, 
-                                X_data["w_s"], state2p_data["w_s"], value_period10_data["w_s"], 
-                                X_state2p_data["w_s"], X_value_period10_data["w_s"]]
-                first_best_ls.append(append_data)
+                store_covariate_f_b = []
+                for cov in covs:
+                    store_covariate_f_b.append(get_covariate_data(f_b, cov))
+                f_b_data = [al] + [cov["w_s"] for cov in store_covariate_f_b] 
+                first_best_ls.append(f_b_data)
 
             pl = policy_learning_
-            pl_X_data = get_covariate_data(pl, "X")
-            pl_state2p_data = get_covariate_data(pl, "state2p")
-            pl_value_period10_data = get_covariate_data(pl, "value_period10")
-            pl_X_state2p_data = get_covariate_data(pl, "X-state2p")
-            pl_state2p_dataX_value_period10_data = get_covariate_data(pl, "X-value_period10")
-            pl_data = [["Policy Learning", 
-                        pl_X_data["w_s"], pl_state2p_data["w_s"], pl_value_period10_data["w_s"], 
-                        pl_X_state2p_data["w_s"], pl_state2p_dataX_value_period10_data["w_s"]]]
-
+            store_covariate_pl = []
+            for cov in covs:
+                store_covariate_pl.append(get_covariate_data(pl, cov))
+            pl_data = [["Policy Learning"] + [cov["w_s"] for cov in store_covariate_pl]]
             file_path = os.path.join(base_path, 'result_table_' + str(iteration_id) + '.txt')
 
             try:
